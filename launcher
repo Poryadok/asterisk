@@ -1,0 +1,90 @@
+import javafx.application.Application;
+import javafx.concurrent.Worker;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.control.Button;
+import javafx.scene.layout.VBox;
+import javafx.scene.web.WebView;
+import javafx.stage.Stage;
+import org.controlsfx.control.Notifications;
+import org.controlsfx.glyphfont.FontAwesome;
+import org.controlsfx.glyphfont.GlyphFont;
+import org.controlsfx.glyphfont.GlyphFontRegistry;
+
+public class LauncherApp extends Application {
+    
+    private Button launchButton;
+    private boolean isAuthenticated = false;
+    
+    @Override
+    public void start(Stage primaryStage) {
+        // Настройка иконок (используем FontAwesome из ControlsFX)
+        GlyphFont fontAwesome = GlyphFontRegistry.font("FontAwesome");
+        
+        // Создаем WebView для авторизации
+        WebView webView = new WebView();
+        webView.getEngine().load("https://ваш-сайт-авторизации.com");
+        
+        // Кнопка запуска (изначально неактивна)
+        launchButton = new Button("Запустить приложение");
+        launchButton.setGraphic(fontAwesome.create(FontAwesome.Glyph.ROCKET));
+        launchButton.setDisable(true);
+        launchButton.setOnAction(e -> launchMainApplication());
+        
+        // Отслеживаем завершение загрузки страницы
+        webView.getEngine().getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
+            if (newState == Worker.State.SUCCEEDED) {
+                checkAuthStatus(webView);
+            }
+        });
+        
+        // Компоновка интерфейса
+        VBox root = new VBox(10, webView, launchButton);
+        root.setPadding(new Insets(10));
+        root.setAlignment(Pos.CENTER);
+        
+        Scene scene = new Scene(root, 800, 600);
+        primaryStage.setTitle("Лаунчер приложения");
+        primaryStage.setScene(scene);
+        primaryStage.show();
+    }
+    
+    private void checkAuthStatus(WebView webView) {
+        // Здесь проверяем статус авторизации
+        // Например, ищем определенный элемент на странице или cookie
+        
+        // Пример проверки URL (замените на вашу логику)
+        String url = webView.getEngine().getLocation();
+        if (url.contains("auth_success")) {
+            isAuthenticated = true;
+            launchButton.setDisable(false);
+            Notifications.create()
+                .title("Авторизация")
+                .text("Вы успешно авторизованы!")
+                .showInformation();
+        }
+    }
+    
+    private void launchMainApplication() {
+        if (isAuthenticated) {
+            try {
+                // Запуск основного приложения
+                ProcessBuilder pb = new ProcessBuilder("java", "-jar", "ваше-приложение.jar");
+                pb.start();
+                
+                // Закрываем лаунчер
+                Platform.exit();
+            } catch (Exception e) {
+                Notifications.create()
+                    .title("Ошибка")
+                    .text("Не удалось запустить приложение")
+                    .showError();
+            }
+        }
+    }
+    
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
