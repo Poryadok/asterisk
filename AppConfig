@@ -1,0 +1,76 @@
+package com.example;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Properties;
+
+public class AppConfig {
+    private static final String CONFIG_FILE = "config.properties";
+    private String authUrl;
+    private String backUrl;
+
+    public AppConfig() {
+        loadConfig();
+    }
+
+    public void loadConfig() {
+        Properties prop = new Properties();
+        
+        try {
+            // Сначала пробуем загрузить из внешнего файла (в дистрибутиве)
+            Path externalConfig = Paths.get(CONFIG_FILE);
+            if (Files.exists(externalConfig)) {
+                try (InputStream input = new FileInputStream(CONFIG_FILE)) {
+                    prop.load(input);
+                }
+            } else {
+                // Если внешнего файла нет, загружаем из ресурсов
+                try (InputStream input = getClass().getClassLoader().getResourceAsStream(CONFIG_FILE)) {
+                    if (input == null) {
+                        throw new IOException("Config file not found in resources");
+                    }
+                    prop.load(input);
+                    
+                    // Сохраняем копию во внешний файл для последующего редактирования
+                    saveConfig(prop);
+                }
+            }
+            
+            authUrl = prop.getProperty("authurl");
+            backUrl = prop.getProperty("backurl");
+            
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        }
+    }
+    
+    public void saveConfig(Properties prop) throws IOException {
+        try (FileOutputStream output = new FileOutputStream(CONFIG_FILE)) {
+            prop.store(output, "Application configuration");
+        }
+    }
+    
+    public void updateConfig(String authUrl, String backUrl) throws IOException {
+        Properties prop = new Properties();
+        prop.setProperty("authurl", authUrl);
+        prop.setProperty("backurl", backUrl);
+        
+        saveConfig(prop);
+        this.authUrl = authUrl;
+        this.backUrl = backUrl;
+    }
+
+    // Геттеры
+    public String getAuthUrl() {
+        return authUrl;
+    }
+
+    public String getBackUrl() {
+        return backUrl;
+    }
+}
