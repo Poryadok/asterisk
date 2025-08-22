@@ -1,135 +1,71 @@
-using System;
-using System.Security.Cryptography;
-using System.Text;
+PKG=unity-webgl-support-2023.2.6f1
+VER=2023.2.6f1
+ARCH=amd64
+ARCHIVE=UnitySetup-WebGL-Support-for-Editor-2023.2.6f1.tar.xz
+UNITY_ROOT=/opt/unity
+WORK=$PWD/$PKG
+OUTDIR=$PWD/out
 
-public static RSA LoadPrivateKeyFromPem(string pemKey)
-{
-    // Удаляем PEM-заголовки и декодируем Base64
-    string base64 = pemKey
-        .Replace("-----BEGIN PRIVATE KEY-----", "")
-        .Replace("-----END PRIVATE KEY-----", "")
-        .Replace("\n", "")
-        .Trim();
+rm -rf "$WORK" "$OUTDIR"
+mkdir -p "$WORK/DEBIAN" "$WORK/usr/share/$PKG"
 
-    byte[] privateKeyDer = Convert.FromBase64String(base64);
+# положим архив внутрь пакета
+cp "$ARCHIVE" "$WORK/usr/share/$PKG/"
 
-    // Парсим DER-структуру PKCS#8 вручную (упрощенный вариант)
-    RSAParameters rsaParams = ParsePkcs8PrivateKey(privateKeyDer);
-    
-    RSA rsa = RSA.Create();
-    rsa.ImportParameters(rsaParams);
-    return rsa;
-}
+# control
+cat > "$WORK/DEBIAN/control" <<EOF
+Package: $PKG
+Version: $VER
+Section: devel
+Priority: optional
+Architecture: $ARCH
+Maintainer: You <you@example.com>
+Description: Unity WebGL Build Support for Unity Editor $VER
+EOF
 
-private static RSAParameters ParsePkcs8PrivateKey(byte[] pkcs8Bytes)
-{
-    // Упрощенный парсинг PKCS#8 (для RSA ключей)
-    // Структура PKCS#8: 
-    //  0x30 (SEQUENCE) -> Version (INTEGER) + AlgorithmIdentifier (SEQUENCE) + PrivateKey (OCTET STRING)
-    //  PrivateKey внутри — это PKCS#1 структура.
+# postinst — сразу с подставленными путями
+cat > "$WORK/DEBIAN/postinst" <<EOF
+#!/bin/sh
+set -e
+ARCHIVE="/usr/share/$PKG/$ARCHIVE"
+UNITY_ROOT="$UNITY_ROOT"
 
-    int offset = 0;
+if [ ! -f "\$ARCHIVE" ]; then
+  echo "Archive not found: \$ARCHIVE" >&2
+  exit 1
+fi
+if [ ! -d "\$UNITY_ROOT" ]; then
+  echo "Unity root not found: \$UNITY_ROOT" >&2
+  exit 1
+fi
 
-    // Пропускаем внешний SEQUENCE (PKCS#8)
-    if (pkcs8Bytes[offset++] != 0x30) 
-        throw new ArgumentException("Invalid PKCS#8 format.");
-    
-    int outerSeqLength = ReadDerLength(pkcs8Bytes, ref offset);
-    int endOffset = offset + outerSeqLength;
+echo "Extracting \$ARCHIVE to \$UNITY_ROOT ..."
+tar -xJf "\$ARCHIVE" -C "\$UNITY_ROOT"
+echo "Unity WebGL Support installed."
+exit 0
+EOF
+chmod 0755 "$WORK/DEBIAN/postinst"
 
-    // Пропускаем Version (обычно 0)
-    if (pkcs8Bytes[offset++] != 0x02) 
-        throw new ArgumentException("Invalid Version in PKCS#8.");
-    
-    int versionLength = ReadDerLength(pkcs8Bytes, ref offset);
-    offset += versionLength;
+# (опционально) postrm на purge
+cat > "$WORK/DEBIAN/postrm" <<EOF
+#!/bin/sh
+set -e
+UNITY_ROOT="$UNITY_ROOT"
+TARGET="\$UNITY_ROOT/Editor/Data/PlaybackEngines/WebGLSupport"
 
-    // Пропускаем AlgorithmIdentifier (OID для RSA)
-    if (pkcs8Bytes[offset++] != 0x30) 
-        throw new ArgumentException("Invalid AlgorithmIdentifier.");
-    
-    int algIdLength = ReadDerLength(pkcs8Bytes, ref offset);
-    offset += algIdLength;
+case "\$1" in
+  purge)
+    echo "Removing \$TARGET ..."
+    rm -rf "\$TARGET"
+  ;;
+esac
+exit 0
+EOF
+chmod 0755 "$WORK/DEBIAN/postrm"
 
-    // PrivateKey (OCTET STRING) -> внутри PKCS#1
-    if (pkcs8Bytes[offset++] != 0x04) 
-        throw new ArgumentException("Expected OCTET STRING for PrivateKey.");
-    
-    int privateKeyLength = ReadDerLength(pkcs8Bytes, ref offset);
-    byte[] pkcs1Bytes = new byte[privateKeyLength];
-    Array.Copy(pkcs8Bytes, offset, pkcs1Bytes, 0, privateKeyLength);
+# сборка
+mkdir -p "$OUTDIR"
+dpkg-deb --build "$WORK" "$OUTDIR/${PKG}_${VER}_${ARCH}.deb"
 
-    // Теперь парсим PKCS#1 (RSA-specific)
-    return ParsePkcs1PrivateKey(pkcs1Bytes);
-}
-
-private static RSAParameters ParsePkcs1PrivateKey(byte[] pkcs1Bytes)
-{
-    // Упрощенный парсинг PKCS#1 (RSA private key)
-    int offset = 0;
-
-    if (pkcs1Bytes[offset++] != 0x30) 
-        throw new ArgumentException("Invalid PKCS#1 format.");
-    
-    int seqLength = ReadDerLength(pkcs1Bytes, ref offset);
-    int endOffset = offset + seqLength;
-
-    // Пропускаем Version (должен быть 0)
-    if (pkcs1Bytes[offset++] != 0x02) 
-        throw new ArgumentException("Invalid Version in PKCS#1.");
-    
-    int versionLength = ReadDerLength(pkcs1Bytes, ref offset);
-    offset += versionLength;
-
-    // Читаем параметры RSA (n, e, d, p, q, dp, dq, qi)
-    RSAParameters rsaParams = new RSAParameters
-    {
-        Modulus = ReadDerInteger(pkcs1Bytes, ref offset),  // n
-        Exponent = ReadDerInteger(pkcs1Bytes, ref offset), // e
-        D = ReadDerInteger(pkcs1Bytes, ref offset),       // d
-        P = ReadDerInteger(pkcs1Bytes, ref offset),       // p
-        Q = ReadDerInteger(pkcs1Bytes, ref offset),       // q
-        DP = ReadDerInteger(pkcs1Bytes, ref offset),      // dp
-        DQ = ReadDerInteger(pkcs1Bytes, ref offset),      // dq
-        InverseQ = ReadDerInteger(pkcs1Bytes, ref offset) // qi
-    };
-
-    return rsaParams;
-}
-
-// Вспомогательные методы для чтения DER-структуры
-private static int ReadDerLength(byte[] data, ref int offset)
-{
-    int length = data[offset++];
-    if ((length & 0x80) != 0)
-    {
-        int lengthBytes = length & 0x7F;
-        length = 0;
-        for (int i = 0; i < lengthBytes; i++)
-        {
-            length = (length << 8) | data[offset++];
-        }
-    }
-    return length;
-}
-
-private static byte[] ReadDerInteger(byte[] data, ref int offset)
-{
-    if (data[offset++] != 0x02) 
-        throw new ArgumentException("Expected INTEGER in DER.");
-    
-    int length = ReadDerLength(data, ref offset);
-    byte[] value = new byte[length];
-    Array.Copy(data, offset, value, 0, length);
-    offset += length;
-
-    // Удаляем ведущие нули (если есть)
-    if (value.Length > 1 && value[0] == 0x00)
-    {
-        byte[] trimmed = new byte[value.Length - 1];
-        Array.Copy(value, 1, trimmed, 0, trimmed.Length);
-        return trimmed;
-    }
-
-    return value;
-}
+# установка
+sudo dpkg -i "$OUTDIR/${PKG}_${VER}_${ARCH}.deb"
