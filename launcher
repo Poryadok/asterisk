@@ -1,90 +1,226 @@
-import javafx.application.Application;
-import javafx.concurrent.Worker;
-import javafx.geometry.Insets;
-import javafx.geometry.Pos;
-import javafx.scene.Scene;
-import javafx.scene.control.Button;
-import javafx.scene.layout.VBox;
-import javafx.scene.web.WebView;
-import javafx.stage.Stage;
-import org.controlsfx.control.Notifications;
-import org.controlsfx.glyphfont.FontAwesome;
-import org.controlsfx.glyphfont.GlyphFont;
-import org.controlsfx.glyphfont.GlyphFontRegistry;
+using System.Collections.Generic;
+using UnityEngine;
 
-public class LauncherApp extends Application {
+public class ContinuousAStar
+{
+    public float stepSize = 1.0f; // Шаг сетки
+    public int maxIterations = 1000; // Ограничение на количество итераций
     
-    private Button launchButton;
-    private boolean isAuthenticated = false;
-    
-    @Override
-    public void start(Stage primaryStage) {
-        // Настройка иконок (используем FontAwesome из ControlsFX)
-        GlyphFont fontAwesome = GlyphFontRegistry.font("FontAwesome");
+    public List<Vector3> FindPath(Vector3 start, Vector3 target, System.Func<Vector3, bool> isWalkable)
+    {
+        var openSet = new PriorityQueue<Node>();
+        var closedSet = new HashSet<Vector3>();
+        var cameFrom = new Dictionary<Vector3, Vector3>();
+        var gScore = new Dictionary<Vector3, float>();
+        var fScore = new Dictionary<Vector3, float>();
         
-        // Создаем WebView для авторизации
-        WebView webView = new WebView();
-        webView.getEngine().load("https://ваш-сайт-авторизации.com");
+        // Инициализация начальной точки
+        var startNode = new Node(start, 0, Heuristic(start, target));
+        openSet.Enqueue(startNode);
+        gScore[start] = 0;
+        fScore[start] = Heuristic(start, target);
         
-        // Кнопка запуска (изначально неактивна)
-        launchButton = new Button("Запустить приложение");
-        launchButton.setGraphic(fontAwesome.create(FontAwesome.Glyph.ROCKET));
-        launchButton.setDisable(true);
-        launchButton.setOnAction(e -> launchMainApplication());
+        int iterations = 0;
         
-        // Отслеживаем завершение загрузки страницы
-        webView.getEngine().getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
-            if (newState == Worker.State.SUCCEEDED) {
-                checkAuthStatus(webView);
+        while (openSet.Count > 0 && iterations < maxIterations)
+        {
+            iterations++;
+            
+            var current = openSet.Dequeue();
+            
+            // Если достигли цели
+            if (Vector3.Distance(current.position, target) < stepSize * 0.5f)
+            {
+                return ReconstructPath(cameFrom, current.position);
             }
-        });
-        
-        // Компоновка интерфейса
-        VBox root = new VBox(10, webView, launchButton);
-        root.setPadding(new Insets(10));
-        root.setAlignment(Pos.CENTER);
-        
-        Scene scene = new Scene(root, 800, 600);
-        primaryStage.setTitle("Лаунчер приложения");
-        primaryStage.setScene(scene);
-        primaryStage.show();
-    }
-    
-    private void checkAuthStatus(WebView webView) {
-        // Здесь проверяем статус авторизации
-        // Например, ищем определенный элемент на странице или cookie
-        
-        // Пример проверки URL (замените на вашу логику)
-        String url = webView.getEngine().getLocation();
-        if (url.contains("auth_success")) {
-            isAuthenticated = true;
-            launchButton.setDisable(false);
-            Notifications.create()
-                .title("Авторизация")
-                .text("Вы успешно авторизованы!")
-                .showInformation();
-        }
-    }
-    
-    private void launchMainApplication() {
-        if (isAuthenticated) {
-            try {
-                // Запуск основного приложения
-                ProcessBuilder pb = new ProcessBuilder("java", "-jar", "ваше-приложение.jar");
-                pb.start();
+            
+            closedSet.Add(current.position);
+            
+            // Получаем всех соседей
+            foreach (var neighbor in GetNeighbors(current.position, stepSize))
+            {
+                // Пропускаем непроходимые и уже обработанные
+                if (!isWalkable(neighbor) || closedSet.Contains(neighbor))
+                    continue;
                 
-                // Закрываем лаунчер
-                Platform.exit();
-            } catch (Exception e) {
-                Notifications.create()
-                    .title("Ошибка")
-                    .text("Не удалось запустить приложение")
-                    .showError();
+                // Вычисляем стоимость пути до соседа через текущую точку
+                float tentativeGScore = gScore[current.position] + 
+                    Vector3.Distance(current.position, neighbor);
+                
+                // Если это новый лучший путь
+                if (!gScore.ContainsKey(neighbor) || tentativeGScore < gScore[neighbor])
+                {
+                    cameFrom[neighbor] = current.position;
+                    gScore[neighbor] = tentativeGScore;
+                    float newFScore = tentativeGScore + Heuristic(neighbor, target);
+                    fScore[neighbor] = newFScore;
+                    
+                    var neighborNode = new Node(neighbor, tentativeGScore, newFScore);
+                    
+                    if (!openSet.Contains(neighbor))
+                    {
+                        openSet.Enqueue(neighborNode);
+                    }
+                }
             }
+        }
+        
+        return null; // Путь не найден
+    }
+    
+    // Эвристика - расстояние до цели
+    private float Heuristic(Vector3 from, Vector3 to)
+    {
+        // Манхэттенское расстояние лучше подходит для движения по осям
+        return Mathf.Abs(from.x - to.x) + Mathf.Abs(from.y - to.y) + Mathf.Abs(from.z - to.z);
+        
+        // Или евклидово расстояние:
+        // return Vector3.Distance(from, to);
+    }
+    
+    // Получение всех возможных соседей с заданным шагом
+    private List<Vector3> GetNeighbors(Vector3 position, float step)
+    {
+        var neighbors = new List<Vector3>();
+        
+        // 6 направлений: вперед/назад, влево/вправо, вверх/вниз
+        Vector3[] directions = {
+            new Vector3(step, 0, 0),    // right
+            new Vector3(-step, 0, 0),   // left
+            new Vector3(0, step, 0),    // up
+            new Vector3(0, -step, 0),   // down
+            new Vector3(0, 0, step),    // forward
+            new Vector3(0, 0, -step)    // back
+        };
+        
+        foreach (var direction in directions)
+        {
+            Vector3 neighborPos = position + direction;
+            neighbors.Add(neighborPos);
+        }
+        
+        return neighbors;
+    }
+    
+    // Восстановление пути от конечной точки к начальной
+    private List<Vector3> ReconstructPath(Dictionary<Vector3, Vector3> cameFrom, Vector3 current)
+    {
+        var path = new List<Vector3> { current };
+        
+        while (cameFrom.ContainsKey(current))
+        {
+            current = cameFrom[current];
+            path.Add(current);
+        }
+        
+        path.Reverse();
+        return path;
+    }
+    
+    // Вспомогательный класс для узла
+    private class Node : System.IComparable<Node>
+    {
+        public Vector3 position;
+        public float gCost; // стоимость от начала
+        public float fCost; // общая стоимость (g + h)
+        
+        public Node(Vector3 position, float gCost, float fCost)
+        {
+            this.position = position;
+            this.gCost = gCost;
+            this.fCost = fCost;
+        }
+        
+        public int CompareTo(Node other)
+        {
+            return fCost.CompareTo(other.fCost);
         }
     }
     
-    public static void main(String[] args) {
-        launch(args);
+    // Простая приоритетная очередь
+    private class PriorityQueue
+    {
+        private List<Node> elements = new List<Node>();
+        
+        public int Count => elements.Count;
+        
+        public void Enqueue(Node item)
+        {
+            elements.Add(item);
+            elements.Sort((a, b) => a.CompareTo(b));
+        }
+        
+        public Node Dequeue()
+        {
+            if (elements.Count == 0) return null;
+            
+            var item = elements[0];
+            elements.RemoveAt(0);
+            return item;
+        }
+        
+        public bool Contains(Vector3 position)
+        {
+            foreach (var node in elements)
+            {
+                if (Vector3.Distance(node.position, position) < 0.001f)
+                    return true;
+            }
+            return false;
+        }
+    }
+}
+
+
+public class WirePathfinder : MonoBehaviour
+{
+    public float gridSize = 0.5f;
+    private ContinuousAStar pathfinder;
+    
+    void Start()
+    {
+        pathfinder = new ContinuousAStar { 
+            stepSize = gridSize,
+            maxIterations = 2000
+        };
+    }
+    
+    public List<Vector3> FindWirePath(Vector3 start, Vector3 end, List<WirePlane> availablePlanes)
+    {
+        // Функция проверки доступности точки
+        bool IsPointAvailable(Vector3 point)
+        {
+            // Проверяем, лежит ли точка на какой-либо из доступных плоскостей
+            foreach (var plane in availablePlanes)
+            {
+                // Используем ранее написанный метод SnapToGrid и проверяем расстояние
+                Vector3 snapped = plane.SnapToGrid(point);
+                if (Vector3.Distance(point, snapped) < gridSize * 0.1f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Привязываем начальную и конечную точки к сетке
+        Vector3 snappedStart = SnapToAnyPlane(start, availablePlanes);
+        Vector3 snappedEnd = SnapToAnyPlane(end, availablePlanes);
+        
+        return pathfinder.FindPath(snappedStart, snappedEnd, IsPointAvailable);
+    }
+    
+    private Vector3 SnapToAnyPlane(Vector3 point, List<WirePlane> planes)
+    {
+        // Ищем ближайшую плоскость и привязываем к её сетке
+        foreach (var plane in planes)
+        {
+            Vector3 snapped = plane.SnapToGrid(point);
+            if (Vector3.Distance(point, snapped) < gridSize * 2f)
+            {
+                return snapped;
+            }
+        }
+        return point;
     }
 }
